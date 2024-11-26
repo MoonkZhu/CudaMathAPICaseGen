@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# a file backup
+*.bak
+
 _tmp_DESKTOP-*/
 # Distribution / packaging
 .Python
