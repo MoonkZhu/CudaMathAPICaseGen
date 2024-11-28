@@ -28,3 +28,9 @@ OPERATOR:-(__half, __half)
 
 ## Run
 python gen_prog.py functions_to_test.txt
+
+
+## TODO
+1. make our template code more simpler.
+2. add compilation pipeline
+3. ?

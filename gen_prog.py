@@ -82,10 +82,11 @@ def getOperatorName(operator_name: str) -> str:
 # CUDA Code Generation
 # --------------------------------------------------------------------------
 
-def half_generate_CUDA_code(fun_name: str, params: List[str], directory: str) -> str:
+def generate_CUDA_code(fun_name: str, params: List[str], return_type: str, directory: str) -> str:
     """Generate a CUDA source file for the given function."""
     sanitized_fun_name = sanitize_file_name(fun_name)
-    file_name = f'half_cuda_code_{sanitized_fun_name}.cu'
+    i = 0
+    file_name = f'{return_type}_cuda_code_{sanitized_fun_name}.cu'
     file_path = os.path.join(directory, file_name)
 
     try:
@@ -97,32 +98,25 @@ def half_generate_CUDA_code(fun_name: str, params: List[str], directory: str) ->
 
             # Generate function signature
             signature = ""
-            param_names = ""
+            param_names = []
             for i, param in enumerate(params):
-                if param in ['float', '__half', 'int']:  # Handle scalars including int
-                    cuda_type = 'half' if param == '__half' else 'float' if param == 'float' else 'int'
-                    signature += f'{cuda_type} x{i}, '
-                    param_names += f'x{i}, '
-                elif param == '__half*':  # Handle pointers to __half
-                    signature += f'half* x{i}, '
-                    param_names += f'x{i}, '
-                else:
-                    print(param)
-                    raise ValueError(f"Unsupported type: {param}. Only 'half', '__half', '__half*', 'float', or 'int' is supported.")
+                signature += param + f' x{i}, '
+                param_names.append(f'x{i}')
 
             # Write kernel function
-            fd.write('  ' + signature[:-2] + ', half *ret) {\n')  # Remove trailing comma and space
-            fd.write('   *ret = ' + fun_name + '(' + param_names[:-2] + ');\n')  # Remove trailing comma and space
+            fd.write('  ' + signature[:-2] + ', ' + return_type + ' *ret) {\n')  # Remove trailing comma and space
+            fd.write('   *ret = ' + fun_name + '(' + ', '.join(param_names) + ');\n')  # Corrected line
             fd.write('}\n\n')
 
             # Write wrapper function
             fd.write('extern "C" {\n')
-            fd.write('half half_kernel_wrapper_1(' + signature[:-2] + ') {\n')
-            fd.write('  half *dev_p;\n')
-            fd.write('  cudaMalloc(&dev_p, sizeof(half));\n')
-            fd.write('  kernel_1<<<1,1>>>(' + param_names + 'dev_p);\n')
-            fd.write('  half res;\n')
-            fd.write('  cudaMemcpy(&res, dev_p, sizeof(half), cudaMemcpyDeviceToHost);\n')
+            fd.write('  ' + return_type + ' kernel_wrapper_1(' + signature[:-2] + ') {\n')
+            fd.write('  ' + return_type + ' *dev_p;\n')
+            fd.write('  cudaMalloc(&dev_p, sizeof('+ return_type +'));\n')
+            fd.write('  kernel_1<<<1,1>>>(' + ', '.join(param_names) + ', dev_p);\n')  # Corrected line
+            fd.write('  ' + return_type + ' res;\n')
+            fd.write('  cudaMemcpy(&res, dev_p, sizeof(' + return_type +'), cudaMemcpyDeviceToHost);\n')
+            fd.write('  cudaFree(dev_p);\n')
             fd.write('  return res;\n')
             fd.write('}\n')
             fd.write('}\n\n')
@@ -133,7 +127,8 @@ def half_generate_CUDA_code(fun_name: str, params: List[str], directory: str) ->
 
     return file_name
 
-def half_operator_generate_CUDA_code(operator_name: str, params: List[str], directory: str) -> str:
+
+def half_operator_generate_CUDA_code(operator_name: str, params: List[str], return_type:str, directory: str) -> str:
     """Generate a CUDA source file for the given operator."""
     sanitized_fun_name = getOperatorName(operator_name)  # Assume this sanitizes operator names
     file_name = f'half_cuda_code_{sanitized_fun_name}.cu'
@@ -150,18 +145,12 @@ def half_operator_generate_CUDA_code(operator_name: str, params: List[str], dire
             signature = ""
             param_names = []
             for i, param in enumerate(params):
-                if param in ['float', '__half', 'int']:  # Handle scalar types
-                    cuda_type = 'half' if param == '__half' else 'float' if param == 'float' else 'int'
-                    signature += f'{cuda_type} x{i}, '
-                    param_names.append(f'x{i}')
-                elif param == '__half*':  # Handle pointer types
-                    signature += f'half* x{i}, '
-                    param_names.append(f'x{i}')
-                else:
-                    raise ValueError(f"Unsupported type: {param}. Supported types are: '__half', '__half*', 'float', 'int'.")
+                print(params[i])
+                signature += param[i] + f' x{i}, '
+                param_names.append(f'x{i}')
 
             # Write kernel function signature
-            fd.write('  ' + signature[:-2] + ', half *ret) {\n')  # Remove trailing comma and space
+            fd.write('  ' + signature[:-2] + ', '+ return_type +' *ret) {\n')  # Remove trailing comma and space
 
             # Kernel function body
             if len(param_names) == 1:  # Unary operator
@@ -174,7 +163,7 @@ def half_operator_generate_CUDA_code(operator_name: str, params: List[str], dire
 
             # Write wrapper function
             fd.write('extern "C" {\n')
-            fd.write('half half_kernel_wrapper_1(' + signature[:-2] + ') {\n')
+            fd.write(return_type + ' half_kernel_wrapper_1(' + signature[:-2] + ') {\n')
             fd.write('  half *dev_p;\n')
             fd.write('  cudaMalloc(&dev_p, sizeof(half));\n')
             fd.write(f'  kernel_1<<<1,1>>>({", ".join(param_names)}, dev_p);\n')
@@ -200,21 +189,39 @@ def half_operator_generate_CUDA_code(operator_name: str, params: List[str], dire
 # --------------------------------------------------------------------------
 
 class FunctionSignature:
-    def __init__(self, fun_name: str, input_types: List[str]):
+    """Represents a function signature with a return type, name, and input types."""
+    def __init__(self, return_type: str, fun_name: str, input_types: List[str]):
+        self.return_type = return_type
         self.fun_name = fun_name
         self.input_types = input_types
 
+    def __repr__(self):
+        return f"FunctionSignature(return_type={self.return_type}, fun_name={self.fun_name}, input_types={self.input_types})"
+
 class OperatorType:
-    def __init__(self, operator_name: str, input_types: List[str]):
+    """Represents an operator type with a return type, name, and input types."""
+    def __init__(self, return_type: str, operator_name: str, input_types: List[str]):
+        self.return_type = return_type
         self.operator_name = operator_name
         self.input_types = input_types
+
+    def __repr__(self):
+        return f"OperatorType(return_type={self.return_type}, operator_name={self.operator_name}, input_types={self.input_types})"
 
 # --------------------------------------------------------------------------
 # Parsing Functions
 # --------------------------------------------------------------------------
 
 def parse_functions_to_test(file_name: str) -> List[Union[FunctionSignature, OperatorType]]:
-    """Parse the input file to extract function signatures."""
+    """
+    Parse the input file to extract function signatures and operator types.
+
+    Args:
+        file_name (str): Path to the input file.
+
+    Returns:
+        List[Union[FunctionSignature, OperatorType]]: A list of parsed objects.
+    """
     results = []
     try:
         with open(file_name, 'r') as fd:
@@ -224,18 +231,39 @@ def parse_functions_to_test(file_name: str) -> List[Union[FunctionSignature, Ope
                     continue
 
                 if line.lstrip().startswith('FUNCTION:'):
-                    no_spaces = ''.join(line.split())
-                    signature = no_spaces.split('FUNCTION:')[1]
-                    fun = signature.split('(')[0]
-                    params = signature.split('(')[1].split(')')[0].split(',')
-                    results.append(FunctionSignature(fun, params))
+                    line = line.strip()
+                    try:
+                        signature = line.split('FUNCTION:')[1]
+
+                        # Parse the return type and function name
+                        parts = signature.split(' ', 1)
+                        if len(parts) != 2:
+                            raise ValueError(f"Invalid FUNCTION format: {line}")
+                        return_type = parts[0].strip()
+                        rest = parts[1]
+                        fun_name, params_raw = rest.split('(', 1)
+                        params = params_raw.split(')')[0].split(',')
+                        results.append(FunctionSignature(return_type.strip(), fun_name.strip(), [p.strip() for p in params]))
+                        #print(params)
+                    except Exception as e:
+                        raise ValueError(f"Failed to parse FUNCTION: {line} - {e}")
 
                 elif line.lstrip().startswith('OPERATOR:'):
-                    no_spaces = ''.join(line.split())
-                    signature = no_spaces.split('OPERATOR:')[1]
-                    operator_name = signature.split('(')[0]
-                    params = signature.split('(')[1].split(')')[0].split(',')
-                    results.append(OperatorType(operator_name, params))
+                    line = line.strip()
+                    try:
+                        signature = line.split('OPERATOR:')[1]
+
+                        # Parse the return type and operator name
+                        parts = signature.split(' ', 1)
+                        if len(parts) != 2:
+                            raise ValueError(f"Invalid OPERATOR format: {line}")
+                        return_type = parts[0].strip()
+                        rest = parts[1]
+                        operator_name, params_raw = rest.split('(', 1)
+                        params = params_raw.split(')')[0].split(',')
+                        results.append(OperatorType(return_type.strip(), operator_name.strip(), [p.strip() for p in params]))
+                    except Exception as e:
+                        raise ValueError(f"Failed to parse OPERATOR: {line} - {e}")
     except FileNotFoundError as e:
         print(f"Error: File {file_name} not found: {e}")
         exit(1)
@@ -272,6 +300,6 @@ if __name__ == "__main__":
     # Generate CUDA code for each function
     for item in functions_to_test:
         if isinstance(item, FunctionSignature):
-            half_generate_CUDA_code(item.fun_name, item.input_types, experiments_dir)
-        elif isinstance(item, OperatorType):
-            half_operator_generate_CUDA_code(item.operator_name, item.input_types, experiments_dir)
+            generate_CUDA_code(item.fun_name, item.input_types ,item.return_type ,experiments_dir)
+        # elif isinstance(item, OperatorType):
+            # half_operator_generate_CUDA_code(item.operator_name, item.return_type, item.input_types, experiments_dir)
